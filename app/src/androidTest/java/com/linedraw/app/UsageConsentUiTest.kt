@@ -36,7 +36,7 @@ class UsageConsentUiTest {
         for (section in UsageDeclaration.sections) compose.onNodeWithText(section.body).performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("consentGuide").performScrollTo().performClick()
         compose.onNodeWithTag("legalDocument").assertIsDisplayed()
-        compose.onNode(hasText("LineDraw 獨立版抽選輔助", substring = true) and hasAnyAncestor(hasTestTag("legalDocument"))).assertExists()
+        compose.onNode(hasText("LineDraw 全自動抽選輔助", substring = true) and hasAnyAncestor(hasTestTag("legalDocument"))).assertExists()
         assertFalse(app.usageConsent.accepted.value)
         compose.onNodeWithTag("closeLegalDocument").performClick()
         compose.onNodeWithTag("consentLicense").performScrollTo().performClick()

@@ -27,6 +27,7 @@ import com.linedraw.app.data.*
 import kotlinx.coroutines.*
 import java.lang.ref.WeakReference
 import kotlin.coroutines.resume
+import kotlin.random.Random
 
 class DrawAccessibilityService : AccessibilityService() {
     companion object {
@@ -36,6 +37,13 @@ class DrawAccessibilityService : AccessibilityService() {
         const val FIXTURE_PACKAGE = "com.linedraw.fixture"
         @Volatile var lastFixturePage: Page? = null
             private set
+        const val SETTLE_MIN_MS = 1_000L
+        const val SETTLE_MAX_MS = 3_000L
+        const val DWELL_MIN_MS = 1_000L
+        const val DWELL_MAX_MS = 2_000L
+        const val CLOSE_SETTLE_MS = 500L
+        private val CLOSE_LABELS = listOf("關閉", "关闭", "Close", "閉じる")
+        const val REOPEN_GRACE_MS = 8_000L
     }
     private val app get() = application as LineDrawApp
     private val repo get() = app.repository
@@ -49,6 +57,7 @@ class DrawAccessibilityService : AccessibilityService() {
     private var lastOpenKey = ""
     private var openedAt = 0L
     private var visibleItem: String? = null
+    private var windowOpen = false
     private var skipRequested: String? = null
     private var lastUnknown = ""
     private var unknownAt = 0L
@@ -74,18 +83,24 @@ class DrawAccessibilityService : AccessibilityService() {
     fun kick() {
         if (job?.isActive == true) return
         val token=++generation
-        lastOpenKey=""; lastObservation=""; skipRequested=null; visibleItem=null
+        lastOpenKey=""; lastObservation=""; skipRequested=null; visibleItem=null; windowOpen=false
         job=scope.launch {
             app.ready.await()
             var trackingKey=""
             var opened=false
             var seenExpected=false
+            var dwelled=false
             var load=LoadState()
             var transition=PageTransitionGuard(null)
             var issue=LocalIssue()
             try {
                 while(isActive && token==generation) {
-                    val batch=repo.dao.activeBatch() ?: break
+                    val batch=repo.dao.activeBatch()
+                    if(batch==null) {
+                        // 最後一筆的視窗只在批次正常跑完時關；暫停或停止時留給本人看。
+                        repo.dao.latestBatch()?.takeIf { it.state=="FINISHED" }?.let { closeWindow(it,it.currentIndex,if(it.demo) FIXTURE_PACKAGE else LINE_PACKAGE) }
+                        break
+                    }
                     if(batch.state!="RUNNING") break
                     ensureOverlay(batch)
                     try {
@@ -93,6 +108,7 @@ class DrawAccessibilityService : AccessibilityService() {
                     var item=repo.dao.item(batch.id,batch.currentIndex)
                     if(item==null) {
                         if(batch.currentIndex<batch.total) { repo.pause("找不到批次項目");break }
+                        closeWindow(batch,batch.currentIndex,if(batch.demo) FIXTURE_PACKAGE else LINE_PACKAGE)
                         statusLabel?.text="LineDraw\n本輪完成，檢查新增活動"
                         if(!awaitNetwork(batch,token)) break
                         if(!repo.continueAfterQueue(batch.id)) break
@@ -107,7 +123,7 @@ class DrawAccessibilityService : AccessibilityService() {
                             repo.finish(batch.id,item.position,Participation.REVIEW,"未確認","已有在途抽選，不重送；接續下一筆")
                             continue
                         }
-                        trackingKey=key; opened=false; seenExpected=false; load=LoadState(); load.track(SystemClock.elapsedRealtime()); issue=LocalIssue(); lastUnknown=""
+                        trackingKey=key; opened=false; seenExpected=false; dwelled=false; load=LoadState(); load.track(SystemClock.elapsedRealtime()); issue=LocalIssue(); lastUnknown=""
                     }
                     visibleItem=key
                     if (skipRequested != null) {
@@ -154,6 +170,7 @@ class DrawAccessibilityService : AccessibilityService() {
                             load.failNow(SystemClock.elapsedRealtime());continue
                         }
                         if(repo.dao.record(batch.profile,item.activityKey)!=null) { repo.skipKnown(batch.id,item.position);continue }
+                        closeWindow(batch,item.position,expected)
                         // Bind this open to a fresh document, never to the preceding page's cached button.
                         transition=PageTransitionGuard(readPage()?.page)
                         if(token!=generation || !launchItem(batch,item,token)) break
@@ -172,7 +189,7 @@ class DrawAccessibilityService : AccessibilityService() {
                     if(page.packageName!=expected) {
                         if(page.packageName==packageNameForApp() && !seenExpected) { delay(200);continue }
                         if(lastUnknown!="OTHER_APP") {lastUnknown="OTHER_APP";unknownAt=SystemClock.elapsedRealtime()}
-                        if(SystemClock.elapsedRealtime()-unknownAt>2000) {repo.pause("已離開預期的抽選 App");break}
+                        if(SystemClock.elapsedRealtime()-unknownAt>(if(seenExpected) 2000 else REOPEN_GRACE_MS)) {repo.pause("已離開預期的抽選 App");break}
                         delay(200);continue
                     }
                     lastUnknown=""
@@ -201,6 +218,12 @@ class DrawAccessibilityService : AccessibilityService() {
                             continue
                         }
                         is Decision.Click -> {
+                            // 活動頁開好後先停 1–2 秒，再重讀畫面決定要按什麼。
+                            if(!dwelled) {
+                                dwelled=true
+                                statusLabel?.text="LineDraw ${item.position+1}/${batch.total}\n頁面已開啟，稍候操作"
+                                delay(Random.nextLong(DWELL_MIN_MS,DWELL_MAX_MS+1));continue
+                            }
                             val unavailable=repo.unavailableReason(batch,item)
                             if(unavailable!=null) {repo.skipUnsent(batch.id,item.position,unavailable,false);continue}
                             statusLabel?.text="LineDraw ${item.position+1}/${batch.total}\n自動${decision.label}"
@@ -245,7 +268,14 @@ class DrawAccessibilityService : AccessibilityService() {
                             }
                             issue.clear()
                             if(decision.action in setOf("SUBMIT","ADD_FRIEND_AND_SUBMIT")) {
-                                repo.finish(batch.id,item.position,Participation.SUBMITTED,"未讀取","抽選點擊已派送；立即前往下一筆，不等待結果")
+                                // 送出後停 1–3 秒等結果，讀得到就記下；視窗留到開下一筆前才關。
+                                statusLabel?.text="LineDraw ${item.position+1}/${batch.total}\n已送出，等待結果"
+                                delay(Random.nextLong(SETTLE_MIN_MS,SETTLE_MAX_MS+1))
+                                val settled=readPage()?.page?.takeIf { it.packageName==expected }?.let { Rules.afterSubmit(it,item,batch.autoFriend,expected) }
+                                // 送出後跳出驗證或登入：留在畫面上交給本人，不關掉也不當成已完成。
+                                if(settled is Decision.Pause) {repo.pause(settled.reason);break}
+                                if(settled is Decision.Finish) repo.finish(batch.id,item.position,settled.status,settled.result,settled.evidence)
+                                else repo.finish(batch.id,item.position,Participation.SUBMITTED,"未讀取","抽選點擊已派送；等待後未讀到結果")
                                 continue
                             }
                             repo.dao.item(batch.id,item.position)?.let { repo.dao.saveItem(it.copy(stage="FRIEND_SENT")) }
@@ -275,6 +305,23 @@ class DrawAccessibilityService : AccessibilityService() {
     }
 
     private fun seconds(ms: Long) = (ms + 999) / 1000
+
+    /** Close the last opened activity window with its top-right close button, else Back; only while the draw app is in front. */
+    private suspend fun closeWindow(batch: Batch, position: Int, expected: String) {
+        if (!windowOpen) return
+        windowOpen = false
+        if (!getSharedPreferences("preferences", 0).getBoolean("closeWindow", true)) return
+        val root = foregroundRoot()?.takeIf { it.packageName?.toString() == expected } ?: return
+        val nodes = mutableListOf<AccessibilityNodeInfo>(); collect(root, nodes)
+        val screen = Rect().also(root::getBoundsInScreen)
+        // The header button belongs to the host app, never to the page: skip anything inside the WebView.
+        val button = nodes.filter { node -> !isWebTarget(node) && CLOSE_LABELS.any { matches(node, it) } }.mapNotNull(::clickable).distinct()
+            .singleOrNull { val r = Rect().also(it::getBoundsInScreen); r.centerY() < screen.top + screen.height() * 0.2 && r.centerX() > screen.centerX() }
+        val method = if (button?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) "BUTTON" else { performGlobalAction(GLOBAL_ACTION_BACK); "BACK" }
+        repo.trace(batch.id, position, "CLOSE_WINDOW", method)
+        // Let the revealed screen settle so the next open is compared against it, not a half-closed page.
+        delay(CLOSE_SETTLE_MS)
+    }
 
     private suspend fun awaitPermit(batch: Batch, token: Int): Boolean {
         if (token != generation) return false
@@ -360,6 +407,7 @@ class DrawAccessibilityService : AccessibilityService() {
             if (intent != null) startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             else LineLinkLauncher.open(this@DrawAccessibilityService, item.url)
         }
+        windowOpen = true
         repo.dao.attemptResult(attempt, "DISPATCHED")
         repo.trace(batch.id,item.position,"OPEN_RESULT","DISPATCHED")
         return true
@@ -474,7 +522,7 @@ class DrawAccessibilityService : AccessibilityService() {
         controls.addView(Button(this).apply { text = "暫停"; minWidth = (64*density).toInt(); setOnClickListener { halt() } })
         controls.addView(Button(this).apply { text = "停止"; minWidth = (64*density).toInt(); setOnClickListener { halt("使用者停止", true) } })
         val params = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply {
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON, PixelFormat.TRANSLUCENT).apply {
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = (80*density).toInt()
             }
         var previousX = 0f; var previousY = 0f

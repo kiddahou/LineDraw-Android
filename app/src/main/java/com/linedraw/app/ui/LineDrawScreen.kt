@@ -66,6 +66,7 @@ fun LineDrawScreen(app: LineDrawApp, currentTimeMillis: () -> Long = System::cur
     var reducedMotion by remember { mutableStateOf(prefs.getBoolean("motion", false)) }
     var autoFriend by remember { mutableStateOf(prefs.getBoolean("autoFriend", true)) }
     var autoContinue by remember { mutableStateOf(prefs.getBoolean("autoContinue",true)) }
+    var closePrevious by remember { mutableStateOf(prefs.getBoolean("closeWindow",true)) }
     var profile by remember { mutableStateOf(prefs.getString("profile", "我的紀錄") ?: "我的紀錄") }
     var fiveLinkArea by remember { mutableStateOf(!BuildConfig.FIVE_LINK_TEST && prefs.getBoolean("fiveLinkArea", false)) }
     val fiveLinks = BuildConfig.FIVE_LINK_TEST || fiveLinkArea
@@ -128,6 +129,24 @@ fun LineDrawScreen(app: LineDrawApp, currentTimeMillis: () -> Long = System::cur
     fun runTask(action: suspend () -> Unit) { scope.launch { try { app.ready.await(); action() } catch (e: Exception) { snackbar.showSnackbar(e.message ?: "操作失敗，請重試") } } }
     suspend fun refreshCatalog() = if (fiveLinkArea) repo.syncFiveLinks() else repo.sync()
     fun sync() { if (!busy) { busy = true; runTask { try { val message = refreshCatalog(); snackbar.showSnackbar(message) } finally { busy = false } } } }
+    // 一鍵全自動：同步後不套篩選，把所有可抽選且沒有紀錄的活動排成一批直接開始。
+    fun startAll() {
+        if (busy || locked) return
+        busy = true
+        runTask {
+            try {
+                check(DrawAccessibilityService.instance != null) { "請先至設定啟用無障礙服務" }
+                // 同步失敗時沿用上次清單；超過 24 小時 start() 仍會擋下。
+                try { repo.sync() } catch (e: IllegalStateException) { if (repo.dao.currentDraws(false).isEmpty()) throw e }
+                val keys = repo.dao.currentDraws(false).filter { websiteCatalog.owns(it) && it.runnable() && repo.dao.record(activeProfile, it.activityKey) == null }
+                    .distinctBy { it.activityKey }.map { it.rowKey }
+                check(keys.isNotEmpty()) { "目前沒有可抽選的活動" }
+                repo.start(keys, activeProfile, autoFriend, demo = false, autoContinue = autoContinue)
+                selected = emptyList()
+                DrawAccessibilityService.instance?.kick()
+            } finally { busy = false }
+        }
+    }
     fun switchTestArea(enter: Boolean) {
         if (busy || locked) return
         busy = true
@@ -189,12 +208,12 @@ fun LineDrawScreen(app: LineDrawApp, currentTimeMillis: () -> Long = System::cur
                 }) { padding ->
                     LazyColumn(Modifier.fillMaxSize().padding(padding).testTag("mainList"), state=when(tab){"紀錄"->historyListState;"設定"->settingsListState;else->drawListState}, contentPadding=PaddingValues(start=20.dp,end=20.dp,top=20.dp,bottom=24.dp), verticalArrangement=Arrangement.spacedBy(16.dp)) {
                         item { Row(verticalAlignment=Alignment.CenterVertically) {
-                            Text("LineDraw 獨立版", color=colors.primary, fontWeight=FontWeight.ExtraBold, fontSize=13.sp, modifier=Modifier.weight(1f))
+                            Text("LineDraw 全自動", color=colors.primary, fontWeight=FontWeight.ExtraBold, fontSize=13.sp, modifier=Modifier.weight(1f))
                             Tag(if(demo) "模擬模式" else if(fiveLinks) "抽選測試 · $profile" else "本機 · $profile")
                         } }
                         item { Text(when(tab) { "抽選" -> "把時間，留給喜歡的事。"; "紀錄" -> "每次抽選，都有跡可循。"; else -> "依你的方式。" }, fontSize=30.sp, lineHeight=39.sp, fontWeight=FontWeight.Bold, letterSpacing=(-.8).sp) }
                         if (demo) item { Notice("目前使用模擬資料與獨立測試頁，不會操作 LINE。", "DEMO") }
-                        if (fiveLinks) item { Notice("這裡會實際開啟 LINE，內含 ${TestCatalog.links.size} 個測試活動。已截止項目保留供查閱，不會加入自動抽選。開始後自動加入好友並抽選，送出後直接前往下一筆。測試紀錄與網站清單分開，不會接續網站新增活動；既有 LINE 抽選結果不會被重設。", "抽選測試區") }
+                        if (fiveLinks) item { Notice("這裡會實際開啟 LINE，內含 ${TestCatalog.links.size} 個測試活動。已截止項目保留供查閱，不會加入自動抽選。開始後自動加入好友並抽選，送出後等 1–3 秒再前往下一筆。測試紀錄與網站清單分開，不會接續網站新增活動；既有 LINE 抽選結果不會被重設。", "抽選測試區") }
                         if (fiveLinkArea) item { OutlinedButton(onClick={switchTestArea(false)}, enabled=!locked && !busy,
                             modifier=Modifier.fillMaxWidth().heightIn(min=48.dp).testTag("exitFiveLinkArea")) { Text("返回網站抽選") } }
                         if (tab == "抽選") {
@@ -212,6 +231,8 @@ fun LineDrawScreen(app: LineDrawApp, currentTimeMillis: () -> Long = System::cur
                             } } }
 
                             if (!demo && !fiveLinks && !metadata[websiteCatalog.metaKey("syncError")].isNullOrBlank()) item { Notice(metadata[websiteCatalog.metaKey("syncError")]!!, "同步未完成") }
+                            if (!demo && !fiveLinks) item { Button(onClick=::startAll, enabled=!locked && !busy,
+                                modifier=Modifier.fillMaxWidth().heightIn(min=56.dp).testTag("startAll")) { Text(if(busy) "準備中…" else "全自動抽選（全部可抽選）") } }
                             if (!serviceEnabled) item { Glass { Row(Modifier.padding(16.dp), verticalAlignment=Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) { Text("準備好抽選輔助", fontWeight=FontWeight.SemiBold); Text("啟用後仍需由你開始批次", fontSize=13.sp, color=colors.onSurfaceVariant) }
                                 TextButton(onClick={showPermission=true}) { Text("設定") }
@@ -263,7 +284,7 @@ fun LineDrawScreen(app: LineDrawApp, currentTimeMillis: () -> Long = System::cur
                                     onToggle={selected=if(d.rowKey in selected) selected-d.rowKey else selected+d.rowKey}, onDetail={detail=d},
                                     manualEnabled=!locked && !manualBusy, onManual={showManualConfirm=d}, onUndo={showUndoManual=recordMap[d.activityKey]}) }
                             }
-                            if(currentDraws.isNotEmpty()) item { Text("抽選點擊送出後直接前往下一筆；「已送出」不代表中獎或未中獎。", fontSize=12.sp, color=colors.onSurfaceVariant, lineHeight=18.sp) }
+                            if(currentDraws.isNotEmpty()) item { Text("抽選送出後等 1–3 秒再關閉視窗；沒讀到結果會記為「已送出」，不代表中獎或未中獎。", fontSize=12.sp, color=colors.onSurfaceVariant, lineHeight=18.sp) }
                         } else if (tab == "紀錄") {
                             item { Text("${if(demo) "模擬紀錄" else if(fiveLinkArea) "抽選測試 · $profile" else profile} · ${profileRecords.size} 筆", color=colors.onSurfaceVariant) }
                             if(profileRecords.isEmpty()) item { EmptyState("從第一筆開始", "完成結果、待確認與手動標記會分開記錄。") }
@@ -301,8 +322,9 @@ fun LineDrawScreen(app: LineDrawApp, currentTimeMillis: () -> Long = System::cur
                             item { CardBox {
                                 Row(verticalAlignment=Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("無障礙服務",fontWeight=FontWeight.SemiBold); Text(if(serviceEnabled) "已啟用" else "尚未啟用",fontSize=13.sp,color=colors.onSurfaceVariant) }; TextButton(onClick={showPermission=true}) { Text("管理") } }
                                 SettingToggle("自動加入店家好友", "僅處理本次所選活動的店家",autoFriend,!locked) {autoFriend=it;prefs.edit().putBoolean("autoFriend",it).apply()}
+                                SettingToggle("開下一筆前關閉活動視窗", "按活動頁右上角的關閉鈕，找不到時改用返回鍵；關閉後畫面異常時可停用",closePrevious,!locked) {closePrevious=it;prefs.edit().putBoolean("closeWindow",it).apply()}
                                 if(!fiveLinks) SettingToggle("自動接續新增活動", "本輪結束後同步；沿用商品、地區、活動狀態及搜尋條件，最多額外 3 輪",autoContinue,!locked) {autoContinue=it;prefs.edit().putBoolean("autoContinue",it).apply()}
-                                Text("載入最多等 30 秒，再重開一次；仍失敗就略過，之後可重試。斷網最多等 60 秒。抽選送出後立即前往下一筆，不等結果。", fontSize=13.sp,color=colors.onSurfaceVariant)
+                                Text("載入最多等 30 秒，再重開一次；仍失敗就略過，之後可重試。斷網最多等 60 秒。活動頁開啟後等 1–2 秒才操作；抽選送出後等 1–3 秒讀結果，再關閉視窗開下一筆。", fontSize=13.sp,color=colors.onSurfaceVariant)
                             } }
                             item { SectionLabel("LIQUID GLASS") }
                             item { CardBox {

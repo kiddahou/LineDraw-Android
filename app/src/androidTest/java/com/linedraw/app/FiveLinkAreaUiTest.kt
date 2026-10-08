@@ -68,7 +68,7 @@ class FiveLinkAreaUiTest {
         app.contentResolver.update(uri,values,null,null)
     }
     @Test fun mainDefaultsToWebsiteAndTestAreaShowsOnlyOwnerLinks(): Unit = runBlocking {
-        assertEquals("com.linedraw.standalone",app.packageName)
+        assertEquals("com.linedraw.standalone.auto",app.packageName)
         compose.onNodeWithText("1 個機會").assertIsDisplayed()
         compose.onNodeWithContentDescription("設定 分頁").performClick()
         compose.onNodeWithTag("mainList").performScrollToNode(hasTestTag("enterFiveLinkArea"))

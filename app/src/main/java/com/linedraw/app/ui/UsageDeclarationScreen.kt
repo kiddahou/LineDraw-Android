@@ -32,7 +32,7 @@ import com.linedraw.app.usage.UsageDeclaration
             listOf(Color(0xFFEAF2FF), Color(0xFFF5EFFB), Color(0xFFE9F6FF))))
             .safeDrawingPadding().padding(24.dp).testTag("usageDeclaration"),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text("LineDraw 獨立版", color = colors.primary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Text("LineDraw 全自動", color = colors.primary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
             Text(UsageDeclaration.TITLE, color = colors.onBackground, fontWeight = FontWeight.Bold, fontSize = 28.sp)
             Surface(Modifier.weight(1f).fillMaxWidth().shadow(12.dp, RoundedCornerShape(28.dp)),
                 shape = RoundedCornerShape(28.dp), color = colors.surface.copy(alpha = if (opaque) 1f else .9f),

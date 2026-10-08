@@ -38,7 +38,7 @@ class PilotSmokeTest {
     }
     @After fun close() {scenario?.close()}
     @Test fun allOwnerLinksAreVisible() {
-        assertEquals("com.linedraw.standalone.pilot",app.packageName)
+        assertEquals("com.linedraw.standalone.auto.pilot",app.packageName)
         val rows=runBlocking{repo.dao.currentDraws(false)}
         assertEquals(TestCatalog.links.map{it.first},rows.map{it.url})
         scenario=ActivityScenario.launch(MainActivity::class.java)

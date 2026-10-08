@@ -70,6 +70,22 @@ class RulesTest {
     @Test fun captchaOverridesResult() {assertTrue(Rules.decide(page("請輸入驗證碼","恭喜中獎"),item,true,"line") is Decision.Pause)}
     @Test fun wrongPackageNeverClicks() {assertTrue(Rules.decide(page(buttons=setOf("參加抽選"),pkg="evil"),item,true,"line") is Decision.Pause)}
     @Test fun storeNameDoesNotGateFriendAction() {assertEquals(Decision.Click("加入好友","ADD_FRIEND"),Rules.decide(Page("line",setOf("其他店","魔導神杖"),setOf("加入好友")),item,true,"line"))}
+    @Test fun afterSubmitRecordsThisDrawsOutcomeInsteadOfAnEarlierCoupon() {
+        val win=Rules.afterSubmit(page("恭喜中獎",buttons=setOf("查看已領取的優惠券")),item,true,"line") as Decision.Finish
+        assertEquals(Participation.COMPLETE to "中獎",win.status to win.result)
+        val coupon=Rules.afterSubmit(page(buttons=setOf("查看已領取的優惠券")),item,true,"line") as Decision.Finish
+        assertEquals(Participation.COMPLETE to "已領取優惠券",coupon.status to coupon.result)
+        val loss=Rules.afterSubmit(page("很可惜，未中獎"),item,true,"line") as Decision.Finish
+        assertEquals(Participation.COMPLETE to "未中獎",loss.status to loss.result)
+        // 送出前就看到的已領取優惠券仍是先前抽過的。
+        assertEquals(Participation.ALREADY,(Rules.decide(page("恭喜中獎",buttons=setOf("查看已領取的優惠券")),item,true,"line") as Decision.Finish).status)
+    }
+    @Test fun afterSubmitPausesOnABlockerAndWaitsWhenNothingIsReadable() {
+        assertEquals(Decision.Pause("此畫面需要使用者處理"),Rules.afterSubmit(page("請輸入驗證碼"),item,true,"line"))
+        // 送出後按鈕還在、結果沒出現：不重按，也不當成結果。
+        assertEquals(Decision.Wait,Rules.afterSubmit(page(buttons=setOf("抽選")),item,true,"line"))
+        assertEquals(Decision.Wait,Rules.afterSubmit(page("抽獎期間已結束"),item,true,"line"))
+    }
     @Test fun activityNameDoesNotGateResult() {assertEquals("中獎",(Rules.decide(Page("line",setOf("另一商品","恭喜中獎"),emptySet()),item,true,"line") as Decision.Finish).result)}
     @Test fun genericConfirmationIsNotACommand() {assertTrue(Rules.decide(page("點擊確認繼續",buttons=setOf("確認")),item,true,"line") is Decision.Pause)}
     @Test fun ambiguousButtonsRetry() {assertTrue(Rules.decide(page(buttons=setOf("參加抽選","立即抽選")),item,true,"line") is Decision.Retry)}

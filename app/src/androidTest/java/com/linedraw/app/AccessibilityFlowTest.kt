@@ -25,7 +25,7 @@ class AccessibilityFlowTest {
         app.ready.await()
         withContext(Dispatchers.IO) {repo.db.clearAllTables()}
         repo.seedDemo()
-        app.getSharedPreferences("preferences",0).edit().putBoolean("demo",true).commit()
+        app.getSharedPreferences("preferences",0).edit().putBoolean("demo",true).remove("closeWindow").commit()
         scenario=ActivityScenario.launch(MainActivity::class.java)
         val automation=instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
         // Instrumentation force-stops its target process; force a fresh service binding.
@@ -49,12 +49,12 @@ class AccessibilityFlowTest {
     @Test fun friendThenDrawAndAlreadyContinueWithoutDuplicateSubmit() = runBlocking {
         val b=repo.start(listOf("demo:friend","demo:already","demo:loss"),"__demo__",true,true)
         withContext(Dispatchers.Main){DrawAccessibilityService.instance!!.kick()}
-        withTimeout(45_000) {while(repo.dao.latestBatch()?.state=="RUNNING") delay(250)}
+        withTimeout(90_000) {while(repo.dao.latestBatch()?.state=="RUNNING") delay(250)}
         val finished=repo.dao.latestBatch()!!
         assertEquals("${finished.reason}; fixture=${DrawAccessibilityService.lastFixturePage}; items=${repo.dao.items(b.id)}","FINISHED",finished.state)
-        assertEquals("SUBMITTED",repo.dao.record("__demo__","demo:friend")?.status)
+        assertEquals("中獎",repo.dao.record("__demo__","demo:friend")?.result)
         assertEquals("ALREADY",repo.dao.record("__demo__","demo:already")?.status)
-        assertEquals("SUBMITTED",repo.dao.record("__demo__","demo:loss")?.status)
+        assertEquals("未中獎",repo.dao.record("__demo__","demo:loss")?.result)
         val attempts=repo.dao.attempts().filter{it.batchId==b.id}
         assertEquals(1,attempts.count{it.action=="ADD_FRIEND" && it.disposition=="DISPATCHED"})
         assertEquals(2,attempts.count{it.action=="SUBMIT" && it.disposition=="DISPATCHED"})
@@ -76,48 +76,58 @@ class AccessibilityFlowTest {
             "LineDraw 測試店","模擬資料","自動點擊測試 $index","linedraw-fixture://$name","模擬活動",now-60_000,now+60_000,index,demo=true) })
         val b=repo.start(specs.map{"demo:$it"},"__demo__",true,true)
         withContext(Dispatchers.Main){DrawAccessibilityService.instance!!.kick()}
-        withTimeout(45_000){while(repo.dao.latestBatch()?.state=="RUNNING") delay(250)}
+        withTimeout(90_000){while(repo.dao.latestBatch()?.state=="RUNNING") delay(250)}
         assertEquals("${repo.dao.latestBatch()?.reason}; page=${DrawAccessibilityService.lastFixturePage}","FINISHED",repo.dao.latestBatch()?.state)
-        assertEquals("SUBMITTED",repo.dao.record("__demo__","demo:web-combined")?.status)
-        assertEquals("SUBMITTED",repo.dao.record("__demo__","demo:web-direct")?.status)
+        assertEquals("中獎",repo.dao.record("__demo__","demo:web-combined")?.result)
+        assertEquals("未中獎",repo.dao.record("__demo__","demo:web-direct")?.result)
         val attempts=repo.dao.attempts().filter{it.batchId==b.id}
         assertEquals(1,attempts.count{it.action=="ADD_FRIEND_AND_SUBMIT" && it.disposition=="DISPATCHED"})
         assertEquals(1,attempts.count{it.action=="SUBMIT" && it.disposition=="DISPATCHED"})
         assertEquals(0,attempts.count{it.action=="ADD_FRIEND" && it.disposition=="DISPATCHED"})
     }
-    @Test fun fiveItemQueueAdvancesImmediatelyWithoutReadingResultsOrResubmitting() = runBlocking {
+    @Test fun fiveItemQueueDwellsSettlesClosesEachWindowAndNeverResubmits() = runBlocking {
         val specs=listOf("web-opaque","web-combined","web-stalled","web-direct","web-already")
         val now=System.currentTimeMillis()
         repo.dao.upsertDraws(specs.mapIndexed { index,name -> Draw("demo:$name","demo:$name","demo:$name",
             "任意清單店家","模擬資料","連續抽選 $index","linedraw-fixture://$name","模擬活動",now-60_000,now+120_000,index,demo=true) })
         val b=repo.start(specs.map{"demo:$it"},"__demo__",true,true)
         withContext(Dispatchers.Main){DrawAccessibilityService.instance!!.kick()}
-        withTimeout(50_000){while(repo.dao.latestBatch()?.state=="RUNNING") delay(250)}
+        withTimeout(90_000){while(repo.dao.latestBatch()?.state=="RUNNING") delay(250)}
         val finished=repo.dao.latestBatch()!!
         assertEquals("${finished.reason}; page=${DrawAccessibilityService.lastFixturePage}","FINISHED",finished.state)
         assertEquals(5,finished.currentIndex)
-        assertEquals(listOf("SUBMITTED","SUBMITTED","SUBMITTED","SUBMITTED","ALREADY"),repo.dao.items(b.id).map{it.state})
-        assertEquals("SUBMITTED",repo.dao.record("__demo__","demo:web-combined")?.status)
+        assertEquals(listOf("SUBMITTED","COMPLETE","SUBMITTED","COMPLETE","ALREADY"),repo.dao.items(b.id).map{it.state})
+        assertEquals("中獎",repo.dao.record("__demo__","demo:web-combined")?.result)
         assertEquals("未讀取",repo.dao.record("__demo__","demo:web-opaque")?.result)
-        assertEquals("SUBMITTED",repo.dao.record("__demo__","demo:web-direct")?.status)
+        assertEquals("未中獎",repo.dao.record("__demo__","demo:web-direct")?.result)
         val attempts=repo.dao.attempts().filter{it.batchId==b.id}
         assertEquals((0..4).toList(),attempts.filter{it.action=="OPEN"}.sortedBy{it.at}.map{it.position})
         for (position in 0..3) assertEquals(1,attempts.count{it.position==position && it.action in setOf("SUBMIT","ADD_FRIEND_AND_SUBMIT") && it.disposition=="DISPATCHED"})
         assertEquals(0,attempts.count{it.position==4 && it.action in setOf("SUBMIT","ADD_FRIEND_AND_SUBMIT")})
         for (position in 0..3) {
+            val open=attempts.single{it.position==position && it.action=="OPEN"}
             val click=attempts.single{it.position==position && it.action=="CLICK_RESULT"}
+            val result=attempts.single{it.position==position && it.action=="ITEM_RESULT"}
+            val close=attempts.single{it.position==position+1 && it.action=="CLOSE_WINDOW"}
             val next=attempts.single{it.position==position+1 && it.action=="OPEN"}
-            assertTrue("Next link waited ${next.at-click.at} ms",next.at-click.at in 0..2_000)
+            assertTrue("Clicked ${click.at-open.at} ms after opening",click.at-open.at>=1_000)
+            assertTrue("Settled for ${result.at-click.at} ms",result.at-click.at in 1_000..5_000)
+            assertTrue("Window closed before the result was saved",close.at>=result.at)
+            assertTrue("Next link opened before the window closed",next.at>=close.at+500)
+            assertTrue("Next link waited ${next.at-click.at} ms",next.at-click.at in 1_000..8_000)
         }
+        // 每個開過的視窗各關一次：前四筆在開下一筆前關，最後一筆在批次收尾時關。
+        assertEquals(5,attempts.count{it.action=="CLOSE_WINDOW"})
         assertTrue(runCatching{repo.start(listOf("demo:web-opaque"),"__demo__",true,true)}.isFailure)
     }
 
     @Test fun receivedCouponPagesAndWinningTransitionContinueWithoutOpeningCoupons(): Unit = runBlocking {
         val specs=listOf("web-claimed-one","web-win-claimed","web-claimed-two","web-direct","web-already")
         val b=runWebQueue(specs)
-        val finished=waitFinished(50_000)
+        val finished=waitFinished()
         assertEquals(5,finished.currentIndex)
-        assertEquals(listOf("ALREADY","SUBMITTED","ALREADY","SUBMITTED","ALREADY"),repo.dao.items(b.id).map { it.state })
+        assertEquals(listOf("ALREADY","COMPLETE","ALREADY","COMPLETE","ALREADY"),repo.dao.items(b.id).map { it.state })
+        assertEquals("中獎",repo.dao.record("__demo__","demo:web-win-claimed")?.result)
         assertEquals("已領取優惠券",repo.dao.record("__demo__","demo:web-claimed-one")?.result)
         assertEquals("已領取優惠券",repo.dao.record("__demo__","demo:web-claimed-two")?.result)
         val attempts=repo.dao.attempts().filter { it.batchId==b.id }
@@ -137,8 +147,8 @@ class AccessibilityFlowTest {
         val finished=waitFinished()
         val fixture=saveTerminalEvidence("supported-terminal-pages",b)
         assertEquals(6,finished.currentIndex)
-        assertEquals(listOf("COMPLETE","COMPLETE","COMPLETE","ALREADY","ALREADY","SUBMITTED"),repo.dao.items(b.id).map { it.state })
-        assertEquals(listOf("未中獎","未中獎","中獎","已領取優惠券","未提供","未讀取"),
+        assertEquals(listOf("COMPLETE","COMPLETE","COMPLETE","ALREADY","ALREADY","COMPLETE"),repo.dao.items(b.id).map { it.state })
+        assertEquals(listOf("未中獎","未中獎","中獎","已領取優惠券","未提供","未中獎"),
             specs.map { repo.dao.record("__demo__","demo:$it")?.result })
         val attempts=repo.dao.attempts().filter { it.batchId==b.id }
         assertFalse(attempts.any { it.action=="PAUSE" || it.action=="REOPEN" })
@@ -151,13 +161,13 @@ class AccessibilityFlowTest {
 
     @Test fun actualLossAndUseCouponFinishWithoutRetryOrCouponClicks() = runBlocking {
         val b=runWebQueue(listOf("web-result-loss-actual","web-result-win-use","web-direct"))
-        val finished=try { waitFinished(25_000) } catch (error:Throwable) {
+        val finished=try { waitFinished(60_000) } catch (error:Throwable) {
             saveTerminalEvidence("fixed-terminal-variants",b)
             throw error
         }
         val fixture=saveTerminalEvidence("fixed-terminal-variants",b)
         assertEquals(3,finished.currentIndex)
-        assertEquals(listOf("COMPLETE","ALREADY","SUBMITTED"),repo.dao.items(b.id).map { it.state })
+        assertEquals(listOf("COMPLETE","ALREADY","COMPLETE"),repo.dao.items(b.id).map { it.state })
         val attempts=repo.dao.attempts().filter { it.batchId==b.id }
         for (position in 0..1) {
             assertEquals(1,attempts.count { it.position==position && it.action=="OPEN" })
@@ -202,9 +212,9 @@ class AccessibilityFlowTest {
 
     @Test fun headerCouponDoesNotMaskDrawAndDisabledFooterStillFinishes() = runBlocking {
         val b=runWebQueue(listOf("web-header-use","web-result-win-use-disabled","web-direct"))
-        assertEquals(3,waitFinished(25_000).currentIndex)
+        assertEquals(3,waitFinished(60_000).currentIndex)
         val fixture=saveTerminalEvidence("terminal-button-boundaries",b)
-        assertEquals(listOf("SUBMITTED","ALREADY","SUBMITTED"),repo.dao.items(b.id).map { it.state })
+        assertEquals(listOf("COMPLETE","ALREADY","COMPLETE"),repo.dao.items(b.id).map { it.state })
         assertEquals(setOf("clicks:web-header-use:draw","clicks:web-direct:draw"),fixture.filterKeys { it.startsWith("clicks:") }.keys)
         assertTrue(fixture.filterKeys { it.startsWith("clicks:") }.values.all { it==1 })
     }
@@ -212,7 +222,7 @@ class AccessibilityFlowTest {
     @Test fun endedDisabledButtonsSkipAndContinueWithoutRecordingDraws() = runBlocking {
         val b = runWebQueue(listOf("ended-disabled", "web-ended", "web-direct"))
         assertEquals(3, waitFinished().currentIndex)
-        assertEquals(listOf("SKIPPED", "SKIPPED", "SUBMITTED"), repo.dao.items(b.id).map { it.state })
+        assertEquals(listOf("SKIPPED", "SKIPPED", "COMPLETE"), repo.dao.items(b.id).map { it.state })
         for (name in listOf("ended-disabled", "web-ended")) assertNull(repo.dao.record("__demo__", "demo:$name"))
         val clicks = repo.dao.attempts().filter { it.batchId == b.id && it.action in setOf("SUBMIT", "ADD_FRIEND", "ADD_FRIEND_AND_SUBMIT", "CLICK_RESULT") }
         assertTrue(clicks.isNotEmpty())
@@ -223,7 +233,7 @@ class AccessibilityFlowTest {
         val names=listOf("ended-period-text","ended-period-disabled","web-ended-period","web-ended-notice","web-direct")
         val b=runWebQueue(names)
         assertEquals(5,waitFinished().currentIndex)
-        assertEquals(listOf("SKIPPED","SKIPPED","SKIPPED","SKIPPED","SUBMITTED"),repo.dao.items(b.id).map{it.state})
+        assertEquals(listOf("SKIPPED","SKIPPED","SKIPPED","SKIPPED","COMPLETE"),repo.dao.items(b.id).map{it.state})
         val evidence=saveTerminalEvidence("ended-period-notices",b)
         assertEquals(setOf("clicks:web-direct:draw"),evidence.filterKeys{it.startsWith("clicks:")}.keys)
         assertEquals(1,evidence["clicks:web-direct:draw"])
@@ -249,7 +259,7 @@ class AccessibilityFlowTest {
         withContext(Dispatchers.Main){DrawAccessibilityService.instance!!.kick()}
         return b
     }
-    private suspend fun waitFinished(timeout:Long=45_000):Batch {
+    private suspend fun waitFinished(timeout:Long=90_000):Batch {
         try { withTimeout(timeout){while(repo.dao.latestBatch()?.state=="RUNNING") delay(250)} }
         catch(e:TimeoutCancellationException) {
             error("Timeout: batch=${repo.dao.latestBatch()}; page=${DrawAccessibilityService.lastFixturePage}; items=${repo.dao.latestBatch()?.let { repo.dao.items(it.id) }}; trace=${repo.dao.attempts().take(45)}")
@@ -259,9 +269,12 @@ class AccessibilityFlowTest {
         }
     }
     @Test fun slowLoadingAndStalePreviousButtonWaitForNewDocument() = runBlocking {
+        // 上一頁的按鈕要留在畫面上才測得到，所以這裡不關視窗。
+        app.getSharedPreferences("preferences",0).edit().putBoolean("closeWindow",false).commit()
         val b=runWebQueue(listOf("web-stalled","web-stale","web-slow","web-direct"))
         waitFinished()
-        assertEquals(List(4){"SUBMITTED"},repo.dao.items(b.id).map{it.state})
+        assertEquals(listOf("SUBMITTED","COMPLETE","COMPLETE","COMPLETE"),repo.dao.items(b.id).map{it.state})
+        assertTrue(repo.dao.attempts().none{it.batchId==b.id && it.action=="CLOSE_WINDOW"})
         val attempts=repo.dao.attempts().filter{it.batchId==b.id}
         for(position in 0..3) assertEquals(1,attempts.count{it.position==position && it.action=="SUBMIT" && it.disposition=="DISPATCHED"})
         for((position,minWait) in listOf(1 to 4_800L,2 to 7_800L)) {
@@ -273,7 +286,7 @@ class AccessibilityFlowTest {
     @Test fun loadingTimeoutReopensOnceThenSkipsUnsentAndContinues() = runBlocking {
         val b=runWebQueue(listOf("web-retry","web-never","web-direct"))
         waitFinished(150_000)
-        assertEquals(listOf("SUBMITTED","LOAD_FAILED","SUBMITTED"),repo.dao.items(b.id).map{it.state})
+        assertEquals(listOf("COMPLETE","LOAD_FAILED","COMPLETE"),repo.dao.items(b.id).map{it.state})
         val attempts=repo.dao.attempts().filter{it.batchId==b.id}
         assertEquals(2,attempts.count{it.position==0 && it.action=="OPEN"})
         assertEquals(2,attempts.count{it.position==1 && it.action=="OPEN"})
@@ -305,7 +318,7 @@ class AccessibilityFlowTest {
     @Test fun ambiguousItemReopensThenSkipsAndFooterInstructionsContinue() = runBlocking {
         val b=runWebQueue(listOf("web-ambiguous","web-instructions","web-result-copy","web-footer"))
         waitFinished()
-        assertEquals(listOf("LOAD_FAILED","SUBMITTED","COMPLETE","SUBMITTED"),repo.dao.items(b.id).map { it.state })
+        assertEquals(listOf("LOAD_FAILED","COMPLETE","COMPLETE","COMPLETE"),repo.dao.items(b.id).map { it.state })
         val attempts=repo.dao.attempts().filter { it.batchId==b.id }
         assertEquals(2,attempts.count { it.position==0 && it.action=="OPEN" })
         assertTrue(attempts.none { it.position==0 && it.action in setOf("SUBMIT","ADD_FRIEND") })
@@ -316,7 +329,7 @@ class AccessibilityFlowTest {
         val b=repo.start(listOf("demo:friend","demo:loss"),"__demo__",false,true)
         withContext(Dispatchers.Main) { DrawAccessibilityService.instance!!.kick() }
         waitFinished()
-        assertEquals(listOf("SKIPPED","SUBMITTED"),repo.dao.items(b.id).map { it.state })
+        assertEquals(listOf("SKIPPED","COMPLETE"),repo.dao.items(b.id).map { it.state })
         assertTrue(repo.dao.attempts().none { it.batchId==b.id && it.action=="ADD_FRIEND" })
     }
     @Test fun overlayMovesAwayFromFooterAndUserCanSkipLoadingItem() = runBlocking {
@@ -331,7 +344,7 @@ class AccessibilityFlowTest {
             wm.updateViewLayout(control,params)
         }
         withTimeout(20_000) { while(repo.dao.latestBatch()?.currentIndex==0) delay(100) }
-        assertEquals("SUBMITTED",repo.dao.item(b.id,0)?.state)
+        assertEquals("COMPLETE",repo.dao.item(b.id,0)?.state)
         withTimeout(5000) { while(repo.dao.attempts().none { it.batchId==b.id && it.position==1 && it.action=="OPEN" }) delay(100) }
         withContext(Dispatchers.Main) {
             val service=DrawAccessibilityService.instance!!
@@ -344,7 +357,7 @@ class AccessibilityFlowTest {
             assertTrue(find(control)!!.performClick())
         }
         waitFinished()
-        assertEquals(listOf("SUBMITTED","SKIPPED","SUBMITTED"),repo.dao.items(b.id).map { it.state })
+        assertEquals(listOf("COMPLETE","SKIPPED","COMPLETE"),repo.dao.items(b.id).map { it.state })
         assertNull(repo.dao.record("__demo__","demo:web-never"))
     }
 }

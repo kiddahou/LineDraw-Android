@@ -34,6 +34,7 @@ object Rules {
     private fun resultText(page: Page, value: String): Boolean {
         return page.texts.any { resultLabelMatches(it, value) }
     }
+    private val winTexts = listOf("恭喜中獎", "恭喜您中獎了！", "恭喜獲得優惠券")
     val endedNotices = listOf("抽獎期間已結束", "抽選期間已結束", "抽籤期間已結束")
     val actionLabels: List<String> get() = submitLabels + combinedLabels + "加入好友"
     fun terminalButton(value: String?): Boolean = listOf("已結束", "查看已領取的優惠券", "使用優惠券").any { labelMatches(value,it) } ||
@@ -45,6 +46,15 @@ object Rules {
         if (requiredPrompts.any { prompt -> page.texts.any { labelMatches(it.trimEnd('！','!','。',':','：'), prompt) } }) return true
         if ((page.inputs + page.dialogTexts).any { text -> blockers.any { text.contains(it, ignoreCase = true) } }) return true
         return page.buttons.any { button -> blockers.any { labelMatches(button, it) } }
+    }
+    /** One read after our own submit click: a blocker pauses, a result finishes, anything else is Wait. */
+    fun afterSubmit(page: Page, item: BatchItem, autoFriend: Boolean, expectedPackage: String): Decision {
+        val decision = decide(page, item.copy(submitted = true), autoFriend, expectedPackage)
+        // decide() reads a received coupon as drawn earlier; right after this submit it is this draw's outcome.
+        if (decision is Decision.Finish && decision.result == "已領取優惠券")
+            return Decision.Finish(Participation.COMPLETE, if (winTexts.any { resultText(page,it) }) "中獎" else "已領取優惠券",
+                "本次送出後畫面顯示已領取優惠券；未開啟或兌換")
+        return decision
     }
     fun decide(page: Page, item: BatchItem, autoFriend: Boolean, expectedPackage: String): Decision {
         if (page.packageName != expectedPackage) return Decision.Pause("已離開預期的抽選 App")
@@ -61,7 +71,7 @@ object Rules {
             return Decision.Finish(Participation.ALREADY,"已領取優惠券","畫面顯示已領取優惠券；不開啟或兌換，接續下一筆")
         if (listOf("您已參加過此抽選", "已參加過抽獎", "已抽過").any { resultText(page,it) }) return Decision.Finish(Participation.ALREADY, "未提供", "畫面明確顯示已抽過")
         if (listOf("很可惜，未中獎", "未中獎", "未抽中", "銘謝惠顧", "可惜沒有抽中", "很可惜沒有抽中", "沒有抽中").any { resultText(page,it) }) return Decision.Finish(Participation.COMPLETE, "未中獎", "畫面明確顯示未中獎")
-        if (listOf("恭喜中獎", "恭喜您中獎了！", "恭喜獲得優惠券").any { resultText(page,it) }) return Decision.Finish(Participation.COMPLETE, "中獎", "畫面明確顯示中獎；未執行兌換")
+        if (winTexts.any { resultText(page,it) }) return Decision.Finish(Participation.COMPLETE, "中獎", "畫面明確顯示中獎；未執行兌換")
         if (listOf("抽選完成", "抽獎完成").any { resultText(page,it) }) return Decision.Finish(Participation.COMPLETE, "未提供", "畫面明確顯示抽選完成")
         if (item.friendAttempted && "已加入好友" in page.texts && item.stage in setOf("FRIEND", "FRIEND_SENT")) return Decision.Reopen
         if (item.submitted) return Decision.Wait

@@ -7,14 +7,14 @@ android {
     namespace = "com.linedraw.app"
     compileSdk { version = release(37) }
     defaultConfig {
-        applicationId = "com.linedraw.standalone"
+        applicationId = "com.linedraw.standalone.auto"
         minSdk = 31
         targetSdk = 36
         versionCode = 4
-        versionName = "0.1.3-standalone"
+        versionName = "0.1.3-standalone-auto"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "FIVE_LINK_TEST", "false")
-        manifestPlaceholders["appLabel"] = "LineDraw 獨立版"
+        manifestPlaceholders["appLabel"] = "LineDraw 全自動"
     }
     buildTypes {
         getByName("debug") { isDefault = true }
