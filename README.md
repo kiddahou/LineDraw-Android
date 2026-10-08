@@ -1,3 +1,89 @@
+# LineDraw 全自動版（Android App ＋ iPhone 用 Mac 腳本）
+
+這是 [beybladehunter/LineDraw-Android](https://github.com/beybladehunter/LineDraw-Android) 獨立版 0.1.3 的修改版，把抽選改成**按一次就全部跑完**，並另外提供 iPhone 的做法。
+免費、原始碼公開、**限非商業使用**（[PolyForm Noncommercial 1.0.0](LICENSE)）。不是 LINE、Funbox 或原作者的官方版本。
+
+| 你的手機 | 用哪個 | 需要電腦嗎 | 驗證狀態 |
+| --- | --- | --- | --- |
+| Android 12 以上 | [下載 APK](https://github.com/kiddahou/LineDraw-Android/releases/download/v0.1.3-auto/LineDraw-0.1.3-full-auto.apk) | 不用 | 模擬器測試全過；尚未在實機 LINE 上驗證 |
+| iPhone（iOS 18 以上） | [`ios-mirroring/`](ios-mirroring/) 的 Mac 腳本 | 要一台 Mac 全程開著 | 畫面判讀有檢查；自動點擊流程尚未實機驗證 |
+
+> 使用前請自行確認是否符合 LINE 與活動主辦單位的規則；自動操作的帳號風險由使用者自負。
+
+## 全自動版操作說明
+
+### 它每一筆做什麼
+
+1. 開啟活動頁，等 1–2 秒。
+2. 按抽獎（需要時先自動加入店家好友）。
+3. 等 1–3 秒，讀畫面上的結果（中獎／未中獎／已抽過／已結束）。
+4. 按活動頁右上角的關閉鈕。
+5. 開下一筆，一直到沒有可抽的為止。
+
+遇到 LINE 要求登入或輸入驗證碼會**停下來等本人處理**；已抽過、已結束的直接略過；同一筆不會送出第二次。
+
+### Android：第一次安裝
+
+1. 用手機瀏覽器下載 [LineDraw-0.1.3-full-auto.apk](https://github.com/kiddahou/LineDraw-Android/releases/download/v0.1.3-auto/LineDraw-0.1.3-full-auto.apk)。
+2. 點開下載的檔案安裝；被問到「不明來源」時選允許。App 名稱是「LineDraw 全自動」，可與原版並存。
+3. 開啟 App，讀完使用須知，按「我已了解，開始使用」。
+4. 到「設定」分頁 →「抽選輔助 → 無障礙服務 → 管理 → 前往 Android 設定」。
+5. 找到「**LineDraw 全自動抽選輔助**」，打開開關並按允許。
+6. 回到 App，確認無障礙服務顯示「已啟用」。
+
+開關是灰色、或跳出「受限制的設定」時：到手機「設定 → 應用程式 → LineDraw 全自動」，點右上角 ⋮ 選「允許受限制的設定」，再回第 5 步。
+
+### Android：每次抽選
+
+1. 確認 LINE 已登入要抽選的帳號。
+2. 開「LineDraw 全自動」，在「抽選」分頁按「**全自動抽選（全部可抽選）**」。
+3. 放著不要碰手機，等它跑完。執行中螢幕會保持常亮，浮動控制列可以暫停、停止或略過目前這筆。
+4. 跑完到「紀錄」分頁看每一筆的結果。
+
+### Android：停下來時
+
+| 狀況 | 處理 |
+| --- | --- |
+| LINE 要求登入或驗證碼 | 本人處理完，回 App 按繼續 |
+| 顯示「已離開預期的抽選 App」 | 中途切到別的 App 或來電；回 App 按繼續 |
+| 斷網超過 60 秒 | 恢復網路後按繼續 |
+| 關閉視窗後畫面怪怪的 | 到「設定」關掉「開下一筆前關閉活動視窗」 |
+| 很多筆顯示「載入失敗」 | 跑完後再按一次全自動，沒送出的會重新排入 |
+
+回報問題時請附上「設定 → 預覽診斷紀錄」的內容；裡面每筆的 `CLOSE_WINDOW BUTTON` 表示按到了關閉鈕，`CLOSE_WINDOW BACK` 表示找不到關閉鈕、改用返回鍵。
+
+### iPhone
+
+iOS 不允許 App 操作其他 App，所以改由 Mac 透過「iPhone 鏡像輸出」代為點擊。完整步驟見 [`ios-mirroring/README.md`](ios-mirroring/README.md)。
+
+### 與原版的差異
+
+| 項目 | 原版 0.1.3-standalone | 全自動版 |
+| --- | --- | --- |
+| 開始方式 | 同步 → 篩選 → 勾選 → 檢查並開始 | 一個按鈕：全自動抽選（原本的方式仍保留） |
+| 開頁後 | 認到按鈕立刻按 | 先等 1–2 秒 |
+| 送出後 | 立刻開下一筆，不讀結果 | 等 1–3 秒，讀得到就記下中獎／未中獎 |
+| 活動視窗 | 不關，直接開下一筆蓋過去 | 開下一筆前關閉（可在設定停用） |
+| 送出後跳出驗證碼 | 記為已送出並繼續 | 暫停，留在畫面上等本人處理 |
+| 螢幕 | 會依系統設定休眠 | 執行中保持常亮 |
+| 安裝識別碼 | `com.linedraw.standalone` | `com.linedraw.standalone.auto` |
+
+沒有改的部分：只同步 Funbox 清單、只抽「可抽選」且有明確起訖時間的活動、自動接續新增活動最多 3 輪、不需要 root。
+
+### 自行編譯
+
+```bash
+git clone -b full-auto https://github.com/kiddahou/LineDraw-Android.git
+cd LineDraw-Android
+./gradlew :app:testDebugUnitTest :app:assembleDebug
+```
+
+APK 會在 `app/build/outputs/apk/debug/app-debug.apk`。模擬器流程測試見 `scripts/test-emulator.sh`。
+
+---
+
+以下是原版 README，內容以原版為準；其中 App 名稱、安裝識別碼、APK 下載位置在全自動版已如上表所述不同。
+
 # LineDraw Android 獨立版
 
 **免費提供、原始碼公開、限非商業使用。** 此版本只同步 [Funbox 公開抽選清單](https://uxux11.github.io/funbox-line/)，不需要陀螺獵人網站帳號或 VIP。首次閱讀並確認使用須知後，即可使用抽選輔助功能。

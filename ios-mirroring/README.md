@@ -23,7 +23,9 @@ iOS 不開放 App 操作其他 App，所以 iPhone 版改由 Mac 透過「iPhone
 - Xcode 命令列工具：`xcode-select --install`
 - iPhone 的 LINE 已登入要抽選的帳號。
 
-## 安裝
+## 一次性設定
+
+### 1. 下載腳本
 
 ```bash
 git clone -b full-auto https://github.com/kiddahou/LineDraw-Android.git
@@ -33,16 +35,20 @@ cd LineDraw-Android/ios-mirroring
 
 `run.sh` 會在第一次執行時自動編譯。
 
-## 權限（只需設定一次）
+### 2. 開權限
 
 到「系統設定 → 隱私權與安全性」，把執行 `run.sh` 的終端機 App 加進這兩項，改完後把該 App 完全關掉重開：
 
 - **螢幕與系統錄音**：截圖辨識畫面用。
 - **輔助使用**：點擊用。
 
-## 使用
+### 3. 配對 iPhone
 
-1. 開啟「iPhone 鏡像輸出」，等視窗出現 iPhone 畫面。
+開啟「iPhone 鏡像輸出」，照畫面和 iPhone 配對一次。視窗若顯示「已登出 iCloud」，代表這台 Mac 還沒登入 Apple 帳號。
+
+## 每次抽選
+
+1. iPhone 放在 Mac 旁並鎖定螢幕；開啟「iPhone 鏡像輸出」，等視窗出現 iPhone 畫面。
 2. 在鏡像畫面用 Safari 開 <https://uxux11.github.io/funbox-line/>。
 3. 把「抽選模式」切到「⚡ 自動連抽」，按開始，讓它開出第一筆。
 4. 在 Mac 終端機執行：
@@ -53,7 +59,9 @@ cd LineDraw-Android/ios-mirroring
    ./run.sh              # 全自動，跑到 Funbox 顯示全部完成
    ```
 
-執行期間 Mac 的滑鼠會被拿去點擊，請不要同時操作這台 Mac。要中止按 `Ctrl+C`。
+5. 之後不要動這台 Mac 的滑鼠和鍵盤，等終端機印出「結束：Funbox 顯示全部完成」。要中止按 `Ctrl+C`。
+
+**第一次使用請依序跑上面三行**：`--dry-run` 時看它印出的「按『抽獎』@座標」合不合理；`--max 1` 時盯著鏡像視窗，確認它有按到抽獎、關掉活動頁、回到 Safari；都正常再跑全自動。之後每次只需要 `./run.sh`。
 
 ## 選項
 
