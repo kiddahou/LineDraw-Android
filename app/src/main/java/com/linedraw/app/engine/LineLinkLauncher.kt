@@ -26,6 +26,9 @@ object LineLinkLauncher {
         }
     }
 
+    fun installed(context: Context): Boolean = try { context.packageManager.getApplicationInfo(PACKAGE, 0).enabled }
+        catch (_: PackageManager.NameNotFoundException) { false }
+
     private fun unavailableMessage(context: Context): String {
         val info = try { context.packageManager.getApplicationInfo(PACKAGE, 0) }
             catch (_: PackageManager.NameNotFoundException) { null }

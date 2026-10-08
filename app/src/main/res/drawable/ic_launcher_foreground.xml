@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- 縮進安全區，圓形或方形遮罩都不會切到 -->
+    <group android:pivotX="54" android:pivotY="54" android:scaleX="0.78" android:scaleY="0.78">
+        <!-- 循環箭頭：自動輪迴 -->
+        <path android:strokeColor="#FFFFFF" android:strokeWidth="8" android:strokeLineCap="round" android:pathData="M67,31.5 A26,26 0 1 1 41,31.5" />
+        <path android:fillColor="#FFFFFF" android:pathData="M50.5,26 L36,23.5 L45.5,39.5 Z" />
+        <!-- 中央星芒：抽中的獎 -->
+        <path android:fillColor="#FFC83D" android:pathData="M54,37 L58.8,49.2 L71,54 L58.8,58.8 L54,71 L49.2,58.8 L37,54 L49.2,49.2 Z" />
+    </group>
+</vector>

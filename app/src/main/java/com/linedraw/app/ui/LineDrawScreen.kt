@@ -110,6 +110,8 @@ fun LineDrawScreen(app: LineDrawApp, currentTimeMillis: () -> Long = System::cur
     var manualBusy by remember { mutableStateOf(false) }
     var openingLine by remember { mutableStateOf(false) }
     var showPermission by remember { mutableStateOf(false) }
+    var showStartAll by remember { mutableStateOf(false) }
+    var startBlock by remember { mutableStateOf<StartBlock?>(null) }
     var showProfile by remember { mutableStateOf(false) }
     var showProducts by rememberSaveable { mutableStateOf(false) }
     var legalDocument by remember { mutableStateOf<LegalDocument?>(null) }
@@ -143,6 +145,29 @@ fun LineDrawScreen(app: LineDrawApp, currentTimeMillis: () -> Long = System::cur
                 check(keys.isNotEmpty()) { "目前沒有可抽選的活動" }
                 repo.start(keys, activeProfile, autoFriend, demo = false, autoContinue = autoContinue)
                 selected = emptyList()
+                DrawAccessibilityService.instance?.kick()
+            } finally { busy = false }
+        }
+    }
+    val counts = Preflight.counts(currentDraws, recordMap.keys, now)
+    // 先檢查再確認：缺什麼就帶去補，都齊了才問要不要開始。
+    fun askStartAll() {
+        if (busy || locked) return
+        startBlock = Preflight.block(DrawAccessibilityService.instance != null, LineLinkLauncher.installed(context), repo.online(), counts)
+        showStartAll = startBlock == null
+    }
+    // 載入失敗的活動沒有留下紀錄，只把還抽得到的那幾筆重新排一批。
+    fun retryFailed(failed: List<BatchItem>) {
+        if (busy || locked) return
+        busy = true
+        runTask {
+            try {
+                check(DrawAccessibilityService.instance != null) { "請先至設定啟用無障礙服務" }
+                val wanted = failed.map { it.activityKey }.toSet()
+                val keys = repo.dao.currentDraws(demo).filter { it.activityKey in wanted && it.runnable() && repo.dao.record(activeProfile, it.activityKey) == null }
+                    .distinctBy { it.activityKey }.map { it.rowKey }
+                check(keys.isNotEmpty()) { "這幾筆已截止、下架或已有紀錄，沒有可重抽的" }
+                repo.start(keys, activeProfile, autoFriend, demo, autoContinue = false, fiveLinks = fiveLinks)
                 DrawAccessibilityService.instance?.kick()
             } finally { busy = false }
         }
@@ -231,13 +256,19 @@ fun LineDrawScreen(app: LineDrawApp, currentTimeMillis: () -> Long = System::cur
                             } } }
 
                             if (!demo && !fiveLinks && !metadata[websiteCatalog.metaKey("syncError")].isNullOrBlank()) item { Notice(metadata[websiteCatalog.metaKey("syncError")]!!, "同步未完成") }
-                            if (!demo && !fiveLinks) item { Button(onClick=::startAll, enabled=!locked && !busy,
-                                modifier=Modifier.fillMaxWidth().heightIn(min=56.dp).testTag("startAll")) { Text(if(busy) "準備中…" else "全自動抽選（全部可抽選）") } }
+                            if (!demo && !fiveLinks) item { Column(verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                                Button(onClick=::askStartAll, enabled=!locked && !busy,
+                                    modifier=Modifier.fillMaxWidth().heightIn(min=56.dp).testTag("startAll")) { Text(if(busy) "同步清單中…" else if(locked) "批次進行中" else "全自動抽選（全部可抽選）") }
+                                Text(if(!serviceEnabled) "尚未啟用抽選輔助，按下後會帶你去設定" else if(counts.total==0) "還沒有清單，開始時會先同步" else counts.summary,
+                                    fontSize=12.sp, color=colors.onSurfaceVariant, modifier=Modifier.fillMaxWidth().testTag("startAllStatus"))
+                            } }
                             if (!serviceEnabled) item { Glass { Row(Modifier.padding(16.dp), verticalAlignment=Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) { Text("準備好抽選輔助", fontWeight=FontWeight.SemiBold); Text("啟用後仍需由你開始批次", fontSize=13.sp, color=colors.onSurfaceVariant) }
                                 TextButton(onClick={showPermission=true}) { Text("設定") }
                             } } }
-                            if (batch != null && batch!!.profile == activeProfile) item { BatchCard(batch!!, allItems.filter { it.batchId == batch!!.id },
+                            if (batch != null && batch!!.profile == activeProfile) item { val batchItems=allItems.filter { it.batchId == batch!!.id }
+                                BatchCard(batch!!, batchItems,
+                                wins=batchItems.count { recordMap[it.activityKey]?.result=="中獎" && it.state in setOf("COMPLETE","ALREADY") }, canRetry=!locked && !busy, onRetry={ retryFailed(batchItems.filter { it.state=="LOAD_FAILED" }) },
                                 onPause={ DrawAccessibilityService.instance?.halt() ?: runTask { repo.pause() } },
                                 onStop={ DrawAccessibilityService.instance?.halt("使用者停止", true) ?: runTask { repo.pause("使用者停止", true) } },
                                 onResume={skip -> runTask { check(DrawAccessibilityService.instance != null) { "請先啟用抽選輔助服務" }; repo.resume(skip); DrawAccessibilityService.instance?.kick() } }) }
@@ -401,6 +432,21 @@ fun LineDrawScreen(app: LineDrawApp, currentTimeMillis: () -> Long = System::cur
                         } finally {manualBusy=false} }}
                     }){Text(if(manualBusy) "儲存中…" else "確認撤銷")}},
                     dismissButton={TextButton(enabled=!manualBusy,onClick={showUndoManual=null}){Text("取消")}}) }
+                startBlock?.let { block -> AlertDialog(onDismissRequest={startBlock=null}, title={Text(block.title)},
+                    text={Text(if(block==StartBlock.NOTHING_READY) "${counts.summary}。\n尚未開始的要等到開始時間；時間未確認的活動不會自動抽，可點進該筆手動開啟。按「同步」可更新清單。" else block.message, modifier=Modifier.testTag("startBlockMessage"))},
+                    confirmButton={ when(block) {
+                        StartBlock.SERVICE -> TextButton(onClick={startBlock=null;showPermission=true}){Text("前往設定")}
+                        StartBlock.NOTHING_READY -> TextButton(onClick={startBlock=null;sync()}){Text("同步")}
+                        else -> TextButton(onClick={startBlock=null}){Text("知道了")}
+                    } },
+                    dismissButton={ if(block in setOf(StartBlock.SERVICE,StartBlock.NOTHING_READY)) TextButton(onClick={startBlock=null}){Text("稍後")} }) }
+                if(showStartAll) AlertDialog(onDismissRequest={showStartAll=false}, title={Text("開始全自動抽選？")}, text={Column(verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                    Text(if(counts.total==0) "會先同步清單，再把所有可抽選的活動排成一批。" else "目前${counts.summary}。開始前會再同步一次，實際筆數以同步後為準。")
+                    Text(if(autoFriend) "需要時會自動加入店家好友。" else "已關閉自動加入好友：需要加好友的活動會略過。")
+                    Text("開始後請保持手機解鎖、讓 LINE 留在畫面上，不要切到別的 App。浮動控制列可以暫停、停止或略過這一筆。")
+                    Text("遇到 LINE 登入或驗證碼會暫停，等你處理。", color=colors.onSurfaceVariant)
+                }}, confirmButton={Button(onClick={showStartAll=false;startAll()}, modifier=Modifier.testTag("confirmStartAll")){Text("開始")}},
+                    dismissButton={TextButton(onClick={showStartAll=false}){Text("返回")}})
                 if(showPermission) AlertDialog(onDismissRequest={showPermission=false},title={Text("啟用抽選輔助")},text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
                     Text("LineDraw 會在你開始批次後讀取 LINE 畫面，點擊加入店家好友及抽選按鈕。")
                     Text("不保存聊天內容；載入失敗會略過，登入或驗證碼會暫停。你可在 Android 設定隨時關閉。")
@@ -453,7 +499,7 @@ fun LineDrawScreen(app: LineDrawApp, currentTimeMillis: () -> Long = System::cur
         }
     }
 }
-@Composable private fun BatchCard(batch:Batch,items:List<BatchItem>,onPause:()->Unit,onStop:()->Unit,onResume:(Boolean)->Unit) {
+@Composable private fun BatchCard(batch:Batch,items:List<BatchItem>,wins:Int,canRetry:Boolean,onRetry:()->Unit,onPause:()->Unit,onStop:()->Unit,onResume:(Boolean)->Unit) {
     Glass { Column(Modifier.padding(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment=Alignment.CenterVertically){Text(if(batch.demo) "模擬批次" else "本次任務",Modifier.weight(1f),fontWeight=FontWeight.Bold);Tag(when(batch.state){"RUNNING"->"進行中";"PAUSED"->"已暫停";"FINISHED"->"已結束";else->"已停止"})}
         val handled=items.count{it.state in setOf("SUBMITTED","COMPLETE","ALREADY","REVIEW","SKIPPED","LOAD_FAILED")}
@@ -461,8 +507,12 @@ fun LineDrawScreen(app: LineDrawApp, currentTimeMillis: () -> Long = System::cur
         LinearProgressIndicator(progress={handled.toFloat()/batch.total.coerceAtLeast(1)},modifier=Modifier.fillMaxWidth().height(6.dp).clip(CircleShape))
         Text("已送出 ${items.count{it.state=="SUBMITTED"}} · 完成 ${items.count{it.state=="COMPLETE"}} · 已抽過 ${items.count{it.state=="ALREADY"}} · 待確認 ${items.count{it.state=="REVIEW"}} · 載入失敗 ${items.count{it.state=="LOAD_FAILED"}} · 略過 ${items.count{it.state=="SKIPPED"}}",fontSize=12.sp,color=MaterialTheme.colorScheme.onSurfaceVariant)
         Text(batch.reason,fontSize=13.sp)
+        if(wins>0) Text("這一批中獎 $wins 筆，請到 LINE 確認優惠券。",fontSize=14.sp,fontWeight=FontWeight.SemiBold,color=MaterialTheme.colorScheme.primary)
+        val failed=items.count { it.state=="LOAD_FAILED" }
+        if(batch.state in setOf("FINISHED","STOPPED") && failed>0) OutlinedButton(onClick=onRetry,enabled=canRetry,modifier=Modifier.testTag("retryFailed")) { Text("重抽載入失敗的 $failed 筆") }
         val exceptions=items.filter { it.state in setOf("REVIEW","LOAD_FAILED","SKIPPED") }
         var showExceptions by remember(batch.id) { mutableStateOf(false) }
+        var confirmStop by remember(batch.id) { mutableStateOf(false) }
         if(exceptions.isNotEmpty()) {
             TextButton(onClick={showExceptions=!showExceptions}) { Text(if(showExceptions) "收合處理明細" else "查看略過／待確認原因（${exceptions.size}）") }
             if(showExceptions) exceptions.forEach { item ->
@@ -475,9 +525,14 @@ fun LineDrawScreen(app: LineDrawApp, currentTimeMillis: () -> Long = System::cur
             Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                 if(batch.state=="RUNNING") OutlinedButton(onClick=onPause){Text("暫停")}
                 else { val current=items.firstOrNull{it.position==batch.currentIndex};if(current?.submitted!=true && current?.state!="REVIEW") OutlinedButton(onClick={onResume(false)}){Text("繼續")};OutlinedButton(onClick={onResume(true)}){Text("略過這筆")}}
-                TextButton(onClick=onStop){Text("停止批次")}
+                TextButton(onClick={confirmStop=true}){Text("停止批次")}
             }
         }
+        // 停止後這一批不能再繼續，和暫停不同，所以多問一次。
+        if(confirmStop) AlertDialog(onDismissRequest={confirmStop=false},title={Text("停止這一批？")},
+            text={Text("停止後不能從這裡繼續，還沒抽的 ${(batch.total-batch.currentIndex).coerceAtLeast(0)} 筆要重新開始一批。只是想先停一下請用「暫停」。")},
+            confirmButton={TextButton(onClick={confirmStop=false;onStop()},modifier=Modifier.testTag("confirmStop")){Text("停止批次")}},
+            dismissButton={TextButton(onClick={confirmStop=false}){Text("返回")}})
     } }
 }
 @Composable private fun DetailDialog(draw:Draw,record:Record?,locked:Boolean,now:Long,openingLine:Boolean,onDismiss:()->Unit,onManual:()->Unit,onUndo:()->Unit,onOpen:()->Unit) {
